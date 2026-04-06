@@ -33,8 +33,17 @@ class Config:
     faiss_metadata_path: Path = DATA_DIR / "embeddings" / "als_metadata.json"
 
     # Embedding
-    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
-    embedding_dim: int = 384
+    # Options:
+    #   "sentence-transformers/all-MiniLM-L6-v2"   — fast, general (384d)
+    #   "neuml/pubmedbert-base-embeddings"           — domain-tuned, biomedical (768d)
+    embedding_model: str = field(
+        default_factory=lambda: os.getenv(
+            "EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
+        )
+    )
+    embedding_dim: int = field(
+        default_factory=lambda: int(os.getenv("EMBEDDING_DIM", "384"))
+    )
 
     # Retrieval
     default_top_k: int = 10

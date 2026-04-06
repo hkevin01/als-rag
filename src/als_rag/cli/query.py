@@ -12,72 +12,83 @@ def main():
     parser.add_argument("--top-k", type=int, default=8)
     parser.add_argument("--no-generate", action="store_true")
     parser.add_argument("--ingest", action="store_true", help="Ingest corpus first")
+    parser.add_argument(
+        "--sources",
+        default="pubmed,scholar,arxiv,clinicaltrials,europepmc",
+        help="Comma-separated ingestion sources (default: all five)",
+    )
+    parser.add_argument(
+        "--review",
+        metavar="TOPIC",
+        help="Run a systematic mini-review on a topic (e.g. 'tofersen SOD1 ALS')",
+    )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.WARNING)
 
     if args.ingest:
-        _run_ingestion()
-        if not args.question:
+        _run_ingestion(args.sources)
+        if not args.question and not args.review:
             return
+
+    if args.review:
+        _run_review(args.review)
+        return
 
     if not args.question:
         parser.print_help()
         sys.exit(1)
 
-    from als_rag.retrieval.hybrid_retriever import HybridRetriever
-    retriever = HybridRetriever()
-    results = retriever.retrieve(args.question, top_k=args.top_k)
+    from als_rag.agents.research_agent import ResearchAgent
+    agent = ResearchAgent(
+        top_k=args.top_k,
+        generate=not args.no_generate,
+    )
+    result = agent.ask(args.question)
 
-    if not results:
-        print("No results found. Run with --ingest first.")
-        sys.exit(1)
-
-    if not args.no_generate:
-        from als_rag.generation.generator import ALSGenerator
-        gen = ALSGenerator(api_key=os.environ.get("OPENAI_API_KEY", ""))
-        answer = gen.generate(args.question, results)
+    if result.answer:
         print("\n=== Answer ===")
-        print(answer)
+        print(result.answer)
         print()
 
     print("=== Sources ===")
-    for i, r in enumerate(results, 1):
-        print(f"{i}. {r.get('title', '')} ({r.get('year', '')}) score={r.get('score', 0):.3f}")
-        if r.get("url"):
-            print(f"   {r['url']}")
+    print(result.format_citation_list())
+
+    if result.entities:
+        labels = {}
+        for e in result.entities:
+            labels[e["label"]] = labels.get(e["label"], 0) + 1
+        print("\n=== Entities Detected ===")
+        for label, count in sorted(labels.items()):
+            print(f"  {label}: {count}")
+
+    if result.expanded_queries and len(result.expanded_queries) > 1:
+        print("\n=== Query Expansions Used ===")
+        for q in result.expanded_queries:
+            print(f"  - {q}")
 
 
-def _run_ingestion():
-    from als_rag.ingestion.pubmed_client import PubMedClient
-    from als_rag.ingestion.scholar_client import ScholarClient
-    from als_rag.ingestion.arxiv_client import ArxivClient
-    from als_rag.ingestion.pipeline import ALSIngestionPipeline
+def _run_ingestion(sources_str: str = "pubmed,scholar,arxiv,clinicaltrials,europepmc"):
+    from als_rag.agents.ingestion_agent import IngestionAgent
+    sources = [s.strip() for s in sources_str.split(",") if s.strip()]
+    print(f"Starting ingestion from: {', '.join(sources)}")
+    agent = IngestionAgent(sources=sources)
+    report = agent.run(on_progress=print)
+    print(report.summary())
 
-    print("Starting ingestion...")
-    pipeline = ALSIngestionPipeline()
-    all_articles = []
 
-    print("Fetching from PubMed...")
-    pm = PubMedClient(
-        api_key=os.environ.get("PUBMED_API_KEY"),
-        contact_email=os.environ.get("CONTACT_EMAIL", "user@example.com"),
-    )
-    all_articles.extend(pm.fetch_als_corpus(max_per_query=30))
-
-    print("Fetching from Semantic Scholar...")
-    sc = ScholarClient(api_key=os.environ.get("SEMANTIC_SCHOLAR_API_KEY"))
-    all_articles.extend(sc.fetch_als_corpus(papers_per_query=30))
-
-    print("Fetching from arXiv...")
-    from als_rag.ingestion.arxiv_client import ArxivClient as Ax
-    ax = Ax()
-    all_articles.extend(ax.fetch_als_corpus(results_per_query=20))
-
-    print(f"Total articles: {len(all_articles)}")
-    n_chunks = pipeline.ingest(all_articles)
-    print(f"Indexed {n_chunks} chunks.")
+def _run_review(topic: str):
+    from als_rag.agents.review_agent import SystematicReviewAgent
+    print(f"Running systematic review: '{topic}'")
+    agent = SystematicReviewAgent()
+    result = agent.review(topic)
+    print("\n=== Synthesis ===")
+    print(result.synthesis)
+    print("\n=== Entity Distribution ===")
+    print(result.format_entity_summary())
+    print(f"\n=== Sources ({len(result.sources)}) ===")
+    print(result.format_source_table())
 
 
 if __name__ == "__main__":

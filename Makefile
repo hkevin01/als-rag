@@ -1,4 +1,4 @@
-.PHONY: install ingest run test lint format clean
+.PHONY: install ingest run test lint format clean review
 
 PYTHON := python
 UV := uv
@@ -13,11 +13,17 @@ install:
 ingest: .env
 	$(PYTHON) -m als_rag.cli.query --ingest
 
+ingest-all: .env
+	$(PYTHON) -m als_rag.cli.query --ingest --sources pubmed,scholar,arxiv,clinicaltrials,europepmc
+
 run: .env
 	streamlit run src/als_rag/web_ui/app.py
 
 query: .env
 	$(PYTHON) -m als_rag.cli.query "$(Q)"
+
+review: .env
+	$(PYTHON) -m als_rag.cli.query --review "$(T)"
 
 test:
 	pytest tests/ -v
@@ -37,9 +43,11 @@ clean:
 
 help:
 	@echo "ALS-RAG Makefile targets:"
-	@echo "  install   - Install with uv"
-	@echo "  ingest    - Fetch and index ALS literature"
-	@echo "  run       - Launch Streamlit UI"
-	@echo "  query Q=  - CLI query"
-	@echo "  test      - Run tests"
-	@echo "  clean     - Remove FAISS index"
+	@echo "  install      - Install with uv"
+	@echo "  ingest       - Fetch and index ALS literature (all 5 sources)"
+	@echo "  ingest-all   - Same as ingest (explicit all-sources)"
+	@echo "  run          - Launch Streamlit UI"
+	@echo "  query Q=     - CLI research query"
+	@echo "  review T=    - Systematic mini-review on topic T"
+	@echo "  test         - Run tests"
+	@echo "  clean        - Remove FAISS index"
