@@ -1,4 +1,4 @@
-.PHONY: install ingest run test lint format clean review
+.PHONY: install ingest run test lint format clean review verify
 
 PYTHON := python
 UV := uv
@@ -25,6 +25,9 @@ query: .env
 review: .env
 	$(PYTHON) -m als_rag.cli.query --review "$(T)"
 
+verify: .env
+	$(PYTHON) -m als_rag.cli.query "$(Q)" --verify
+
 test:
 	pytest tests/ -v
 
@@ -49,5 +52,6 @@ help:
 	@echo "  run          - Launch Streamlit UI"
 	@echo "  query Q=     - CLI research query"
 	@echo "  review T=    - Systematic mini-review on topic T"
+	@echo "  verify Q=    - Query then run citation verification"
 	@echo "  test         - Run tests"
 	@echo "  clean        - Remove FAISS index"

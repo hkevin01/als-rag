@@ -240,15 +240,21 @@ class TestHybridRetrieverBM25:
         assert 0.0 <= results[0]["bm25_score"] <= 1.0
 
     def test_hybrid_scorer_prefers_relevant(self):
-        """BM25 score contribution should change the ranking."""
+        """BM25 score contribution should change the ranking.
+
+        BM25Okapi IDF = log((N - df + 0.5) / (df + 0.5)).  With N=2, df=1
+        gives log(1) = 0, so we need at least 3 docs for non-zero IDF.
+        """
         from als_rag.retrieval.hybrid_retriever import HybridRetriever
         r = HybridRetriever(dense_weight=0.5)
         corpus = [
             {"chunk_text": "tofersen BIIB067 SOD1 antisense ALS treatment", "title": "Tofersen", "doc_id": "x"},
             {"chunk_text": "riluzole glutamate ALS neuroprotection", "title": "Riluzole", "doc_id": "y"},
+            {"chunk_text": "edaravone oxidative stress ALS neuroprotection", "title": "Edaravone", "doc_id": "z"},
         ]
         r._build_bm25(corpus)
-        results = r._bm25_retrieve("tofersen SOD1", top_k=2)
+        results = r._bm25_retrieve("tofersen SOD1", top_k=3)
+        assert len(results) > 0, "BM25 should return results for query with matching term"
         assert results[0]["doc_id"] == "x"
 
 
@@ -349,3 +355,117 @@ class TestEuropePMCClient:
         assert results[0]["year"] == "2023"
         assert "Smith" in results[0]["authors"][0]
         assert results[0]["url"] == "https://europepmc.org/article/MED/12345678"
+
+
+# ---------------------------------------------------------------------------
+# CitationVerificationAgent
+# ---------------------------------------------------------------------------
+
+class TestCitationVerificationAgent:
+    def test_import(self):
+        from als_rag.agents.citation_agent import CitationVerificationAgent, CitationVerificationResult
+        assert CitationVerificationAgent is not None
+        assert CitationVerificationResult is not None
+
+    def test_empty_answer(self):
+        from als_rag.agents.citation_agent import CitationVerificationAgent
+        agent = CitationVerificationAgent()
+        result = agent.verify("", [])
+        assert result.coverage_score == 0.0
+        assert result.flagged is True
+
+    def test_no_sources(self):
+        from als_rag.agents.citation_agent import CitationVerificationAgent
+        agent = CitationVerificationAgent()
+        result = agent.verify("Tofersen reduces SOD1 mRNA levels.", [])
+        # No sources → nothing matches → coverage 0
+        assert result.coverage_score == 0.0
+        assert result.flagged is True
+
+    def test_fully_supported_answer(self):
+        from als_rag.agents.citation_agent import CitationVerificationAgent
+        sources = [
+            {
+                "title": "Tofersen SOD1 ALS Trial 2022",
+                "chunk_text": (
+                    "Tofersen is an antisense oligonucleotide that reduces SOD1 mRNA "
+                    "and plasma neurofilament light chain in patients with SOD1-ALS. "
+                    "The VALOR trial showed significant NfL reduction over 28 weeks."
+                ),
+            }
+        ]
+        answer = (
+            "Tofersen reduces SOD1 mRNA in patients with ALS. "
+            "The VALOR trial demonstrated NfL reduction over 28 weeks."
+        )
+        agent = CitationVerificationAgent(support_threshold=0.10)
+        result = agent.verify(answer, sources)
+        assert result.coverage_score > 0.5
+        assert len(result.claims) >= 1
+
+    def test_unsupported_claim_detected(self):
+        from als_rag.agents.citation_agent import CitationVerificationAgent
+        sources = [
+            {
+                "title": "Riluzole Efficacy",
+                "chunk_text": "Riluzole reduces glutamate excitotoxicity in ALS patients.",
+            }
+        ]
+        answer = (
+            "Riluzole has been shown to reduce glutamate levels in ALS. "
+            "Quantum computing will revolutionize protein folding predictions by 2030."
+        )
+        agent = CitationVerificationAgent(support_threshold=0.10)
+        result = agent.verify(answer, sources)
+        # Second claim about quantum computing should be unsupported
+        assert len(result.unsupported) >= 1
+        assert any("quantum" in u.lower() or "protein" in u.lower() for u in result.unsupported)
+
+    def test_coverage_score_range(self):
+        from als_rag.agents.citation_agent import CitationVerificationAgent
+        sources = [{"title": "ALS paper", "chunk_text": "ALS neurofilament biomarker NfL"}]
+        agent = CitationVerificationAgent()
+        result = agent.verify("NfL is a neurofilament biomarker in ALS.", sources)
+        assert 0.0 <= result.coverage_score <= 1.0
+
+    def test_report_format(self):
+        from als_rag.agents.citation_agent import CitationVerificationAgent
+        sources = [{"title": "SOD1 Study", "chunk_text": "SOD1 mutation causes familial ALS motor neuron degeneration."}]
+        agent = CitationVerificationAgent()
+        result = agent.verify("SOD1 mutation causes familial ALS.", sources)
+        report = result.report()
+        assert "Citation Coverage" in report
+        assert "Claims checked" in report
+
+    def test_claim_verdict(self):
+        from als_rag.agents.citation_agent import CitationClaim
+        c_supported = CitationClaim(text="test", supported=True, best_source_title="Paper A", best_score=0.75)
+        c_unsupported = CitationClaim(text="test", supported=False, best_source_title=None, best_score=0.02)
+        assert "✅" in c_supported.verdict()
+        assert "⚠️" in c_unsupported.verdict()
+
+    def test_verify_from_research_result(self):
+        from als_rag.agents.citation_agent import CitationVerificationAgent
+        from types import SimpleNamespace
+        fake_result = SimpleNamespace(
+            answer="NfL is elevated in ALS serum.",
+            sources=[{"title": "NfL ALS", "chunk_text": "Neurofilament NfL elevated serum ALS patients."}],
+        )
+        agent = CitationVerificationAgent()
+        vresult = agent.verify_from_research_result(fake_result)
+        assert vresult.answer == fake_result.answer
+
+    def test_tokenise_helper(self):
+        from als_rag.agents.citation_agent import _tokenise
+        tokens = _tokenise("The SOD1 gene mutation causes ALS")
+        assert "sod1" in tokens
+        assert "gene" in tokens
+        # stop words excluded
+        assert "the" not in tokens
+        assert "causes" in tokens
+
+    def test_split_into_sentences(self):
+        from als_rag.agents.citation_agent import _split_into_sentences
+        text = "SOD1 mutation causes ALS. C9orf72 is the most common genetic cause. TDP-43 aggregation is found in neurons."
+        sents = _split_into_sentences(text)
+        assert len(sents) >= 2

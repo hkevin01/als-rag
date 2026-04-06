@@ -22,6 +22,11 @@ def main():
         metavar="TOPIC",
         help="Run a systematic mini-review on a topic (e.g. 'tofersen SOD1 ALS')",
     )
+    parser.add_argument(
+        "--verify",
+        action="store_true",
+        help="Run CitationVerificationAgent on the generated answer to flag hallucinations",
+    )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -68,6 +73,12 @@ def main():
         for q in result.expanded_queries:
             print(f"  - {q}")
 
+    if args.verify and result.answer:
+        from als_rag.agents.citation_agent import CitationVerificationAgent
+        verifier = CitationVerificationAgent()
+        vresult = verifier.verify(result.answer, result.sources)
+        print("\n=== Citation Verification ===")
+        print(vresult.report())
 
 def _run_ingestion(sources_str: str = "pubmed,scholar,arxiv,clinicaltrials,europepmc"):
     from als_rag.agents.ingestion_agent import IngestionAgent
